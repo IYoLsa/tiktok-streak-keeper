@@ -1,0 +1,12 @@
+{
+  "name": "tiktok-streak",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "streak": "node streak.js"
+  },
+  "dependencies": {
+    "playwright": "^1.45.0"
+  }
+}
