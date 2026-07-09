@@ -1,77 +1,38 @@
-# TikTok Streak Keeper 🔥
+# tiktok streak keeper
 
-Keep your TikTok streaks alive automatically. Once a day, this sends a single emoji
-(no text, just 🔥) to each friend on your list, using GitHub Actions as free hosting.
-Nothing runs on your computer. Your PC can be off. It just works.
+sends one emoji a day to your tiktok friends so your streaks don't die. runs on github actions so it's completely free and your pc doesn't need to be on. made this because i kept losing streaks every time i was busy for a day.
 
-- **Free.** GitHub's free tier covers this ~30x over.
-- **No password needed.** It uses your browser session cookies, stored as an encrypted GitHub secret only you can access.
-- **Low-key.** Runs once a day at a randomized time, types with human-like delays, sends one emoji per friend.
+no password needed, it uses your browser cookies. they go in an encrypted secret on your own fork, nobody else can see them (including me).
 
-## Setup (about 5 minutes)
+## setup
 
-**1. Fork this repo** (top right). Your fork can stay public or you can make it private, either works.
+1. fork this repo
+2. edit `config.json`, put your friends usernames in (the @ handles without the @). change the emoji too if you want
+3. get your cookies:
+   - install the Cookie-Editor extension (chrome or firefox)
+   - log into tiktok.com and make sure dms work
+   - while on tiktok.com click the extension and hit Export > JSON
+   - in your fork: Settings > Secrets and variables > Actions > New repository secret. name it `TIKTOK_COOKIES` and paste
+4. go to the Actions tab, enable workflows if it asks, open daily-streak and hit Run workflow to test
 
-**2. Add your friends.** Edit `config.json` in your fork and put in your friends'
-TikTok @usernames (without the @). You can also change the emoji.
+if the run goes green, check your dms, the messages are there. if it's red, open the run and look at the logs, there's also screenshots in the artifacts.
 
-```json
-{
-  "emoji": "🔥",
-  "friends": ["bestie123", "cooldude456"]
-}
+that's it, it runs on its own every day now. default time is 10:00 utc, to change it edit the cron line in `.github/workflows/streak.yml` (crontab.guru if you don't speak cron). i run mine right after midnight so the message lands as soon as the new day starts.
+
+## stuff to know
+
+- you can only dm mutuals, same rule as the app
+- streaks need both sides to message, this only keeps your half alive, if your friend ghosts the streak dies anyway lol
+- cookies expire after a while (weeks or months, depends). the run fails, github emails you, you just export fresh cookies and update the secret. takes a minute
+- on public forks github pauses scheduled workflows after 60 days of no repo activity. they email you first and it's one click to re-enable. private forks don't have this
+- automating your account is against tiktok tos. realistically a couple messages a day to actual friends is nothing, i've had zero issues, but it's your account and your call
+
+## run it locally
+
 ```
-
-Note: you can only DM mutual friends (you follow each other). Same rule as the app.
-
-**3. Give it your TikTok session:**
-   - Install the free [Cookie-Editor](https://cookie-editor.com/) browser extension.
-   - Log in at [tiktok.com](https://www.tiktok.com) and check that DMs work in your browser.
-   - While on tiktok.com, open Cookie-Editor, hit **Export → JSON** (copies to clipboard).
-   - In your fork: **Settings → Secrets and variables → Actions → New repository secret**.
-     Name it `TIKTOK_COOKIES`, paste the JSON, save.
-
-**4. Turn it on and test.** Go to the **Actions** tab, enable workflows if GitHub asks,
-pick **daily-streak**, and hit **Run workflow**. Wait a minute or two. Green check =
-your friends just got the emoji. Red X = open the run and check the logs and the
-screenshots artifact to see what happened.
-
-That's it. It now runs every day on its own.
-
-## Picking your send time
-
-The schedule is in `.github/workflows/streak.yml`. Default is 10:00 UTC. If you want
-it just after midnight your time (fresh streak day), convert your local 00:15 to UTC
-at [crontab.guru](https://crontab.guru) and edit the cron line. Any daily time works,
-since one message per calendar day is all a streak needs.
-
-Optional: set a repo variable `TZ_ID` (Settings → Secrets and variables → Actions →
-Variables) to your timezone like `Europe/Berlin` so the browser matches where you live.
-
-## Maintenance
-
-Basically none. When TikTok eventually expires your session (typically after weeks or
-months), the run fails with "Session expired" and GitHub emails you. Fix: re-export
-cookies (step 3) and update the secret. One minute.
-
-Two things to know:
-- On public forks, GitHub pauses scheduled workflows after 60 days without repo
-  activity. It emails you first, and one click re-enables it. Private forks don't have
-  this, but their Actions minutes are limited (still way more than this needs).
-- Your friends have to message back for streaks to survive. This keeps *your* half alive.
-
-## Disclaimer
-
-This is an unofficial tool that automates your own account through the regular TikTok
-website. That's against TikTok's terms of service, so use it at your own risk. Sending
-a few messages a day to real friends is about as low-risk as automation gets, but
-nobody can promise TikTok won't ever mind. Your cookies never leave your fork's
-encrypted secrets. Don't share them with anyone or paste them anywhere public.
-
-## Local test (optional)
-
-```bash
-npm install && npx playwright install chromium
-# save your cookie export as cookies.json (gitignored)
+npm install
+npx playwright install chromium
 node streak.js
 ```
+
+put your cookie export in `cookies.json` first (it's gitignored so you can't accidentally commit it)

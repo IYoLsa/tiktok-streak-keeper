@@ -1,8 +1,7 @@
-// TikTok streak keeper — sends a single emoji (no text) to each friend in config.json
-// via the tiktok.com web DM interface. Friends are @usernames: we open each profile
-// and click its Message button, which is sturdier than matching nicknames in the chat list.
-// Session comes from exported browser cookies: local cookies.json (testing) or the
-// TIKTOK_COOKIES env var (CI).
+// sends one emoji to each friend in config.json through the tiktok website.
+// goes profile -> Message button instead of digging through the chat list,
+// way less fragile. cookies come from cookies.json locally or the
+// TIKTOK_COOKIES secret on github.
 
 import { chromium } from "playwright";
 import { readFileSync, existsSync, mkdirSync } from "fs";
