@@ -13,6 +13,8 @@ function loadCookies() {
   let raw;
   if (process.env.TIKTOK_COOKIES) {
     raw = process.env.TIKTOK_COOKIES;
+  } else if (process.env.TIKTOK_COOKIE_FILE) {
+    raw = readFileSync(process.env.TIKTOK_COOKIE_FILE, "utf8");
   } else if (existsSync("cookies.json")) {
     raw = readFileSync("cookies.json", "utf8");
   } else {
@@ -29,6 +31,7 @@ function loadCookies() {
   if (!Array.isArray(list)) throw new Error("Cookie export must contain an array.");
   const sameSiteMap = {
     no_restriction: "None",
+    none: "None",
     lax: "Lax",
     strict: "Strict",
   };
@@ -58,28 +61,93 @@ class BotFailure extends Error {
   }
 }
 
+function safeRoute(url) {
+  try {
+    const { hostname, pathname } = new URL(url);
+    const site = /(^|\.)tiktok\.com$/i.test(hostname) ? "tiktok" : "other";
+    const route = /^\/login(?:\/|$)/.test(pathname) ? "login"
+      : /^\/messages(?:\/|$)/.test(pathname) ? "messages"
+      : /^\/@/.test(pathname) ? "profile" : pathname === "/" ? "home" : "other";
+    return { site, route };
+  } catch {
+    return { site: "other", route: "other" };
+  }
+}
+
+function sessionNamedCookies(cookies) {
+  return cookies.filter((cookie) => /^sessionid(?:_ss)?$|^sid_tt$|^sid_guard$/.test(cookie.name)).length;
+}
+
+async function cookieImportSummary(context, cookies) {
+  const stored = await context.cookies();
+  const applicable = await context.cookies("https://www.tiktok.com/messages");
+  const sameKey = (a, b) => a.name === b.name && a.domain === b.domain && a.path === b.path;
+  return {
+    parsed: cookies.length,
+    expiredAtImport: cookies.filter((cookie) => cookie.expires > 0 && cookie.expires <= Date.now() / 1000).length,
+    emptyValues: cookies.filter((cookie) => !cookie.value).length,
+    sameSites: cookies.reduce((counts, cookie) => {
+      counts[cookie.sameSite] = (counts[cookie.sameSite] || 0) + 1;
+      return counts;
+    }, {}),
+    stored: stored.length,
+    matchingValues: cookies.filter((cookie) => stored.some((entry) => sameKey(cookie, entry) && cookie.value === entry.value)).length,
+    attributeMismatches: cookies.filter((cookie) => stored.some((entry) => sameKey(cookie, entry)
+      && (cookie.expires !== entry.expires || cookie.sameSite !== entry.sameSite
+        || cookie.secure !== entry.secure || cookie.httpOnly !== entry.httpOnly))).length,
+    applicableToMessages: applicable.length,
+    applicableSessionNamedCookies: sessionNamedCookies(applicable),
+  };
+}
+
 function observePage(page) {
-  const counts = { httpErrors: {}, failedRequests: 0, pendingRequests: 0, scriptErrors: 0 };
+  const counts = { httpErrors: {}, failedRequests: 0, failureKinds: {}, pendingRequests: 0, scriptErrors: 0,
+    documentRequests: [], navigations: [] };
   diagnostics.set(page, counts);
   const pending = new Set();
+  const documents = new WeakMap();
   const relevant = (request) => ["document", "script", "xhr", "fetch"].includes(request.resourceType());
   page.on("request", (request) => {
     if (relevant(request)) pending.add(request);
     counts.pendingRequests = pending.size;
+    if (request.resourceType() === "document" && request.frame() === page.mainFrame()) {
+      const record = { ...safeRoute(request.url()), status: null,
+        redirectedFrom: request.redirectedFrom() ? safeRoute(request.redirectedFrom().url()).route : null,
+        cookieHeaderCount: null, sessionNamedCookieHeaderCount: null };
+      documents.set(request, record);
+      counts.documentRequests.push(record);
+      if (counts.documentRequests.length > 8) counts.documentRequests.shift();
+      request.allHeaders().then((headers) => {
+        const pairs = (headers.cookie || "").split(";").map((pair) => pair.trim()).filter(Boolean);
+        record.cookieHeaderCount = pairs.length;
+        record.sessionNamedCookieHeaderCount = pairs.filter((pair) => /^sessionid(?:_ss)?=|^sid_tt=|^sid_guard=/.test(pair)).length;
+      }).catch(() => {});
+    }
   });
   page.on("requestfinished", (request) => {
     pending.delete(request);
     counts.pendingRequests = pending.size;
   });
   page.on("requestfailed", (request) => {
-    if (relevant(request)) counts.failedRequests++;
+    if (relevant(request)) {
+      counts.failedRequests++;
+      const kind = request.failure()?.errorText?.match(/^net::ERR_[A-Z_]+/)?.[0] || "other";
+      counts.failureKinds[kind] = (counts.failureKinds[kind] || 0) + 1;
+    }
     pending.delete(request);
     counts.pendingRequests = pending.size;
   });
   page.on("response", (response) => {
+    const record = documents.get(response.request());
+    if (record) record.status = response.status();
     if (relevant(response.request()) && response.status() >= 400) {
       counts.httpErrors[response.status()] = (counts.httpErrors[response.status()] || 0) + 1;
     }
+  });
+  page.on("framenavigated", (frame) => {
+    if (frame !== page.mainFrame()) return;
+    counts.navigations.push(safeRoute(frame.url()));
+    if (counts.navigations.length > 8) counts.navigations.shift();
   });
   page.on("pageerror", () => counts.scriptErrors++);
 }
@@ -99,13 +167,17 @@ async function readState(page) {
     const route = /\/login(?:\/|$)/.test(location.pathname) ? "login"
       : /\/messages(?:\/|$)/.test(location.pathname) ? "messages"
       : /^\/@/.test(location.pathname) ? "profile" : "other";
+    const authenticatedInbox = visibleNodes('[data-e2e="nav-profile"]').length > 0
+      && visibleNodes('[data-e2e="dm-new-conversation-list"]').length > 0;
+    const loginControlsVisible = visibleNodes('[data-e2e="top-login-button"], #header-login-button, #top-right-login-button, #top-right-action-bar-login-button, #login-modal-title').length > 0;
     return {
       route,
       readyState: document.readyState,
-      authenticatedInbox: visibleNodes('[data-e2e="nav-profile"]').length > 0
-        && visibleNodes('[data-e2e="dm-new-conversation-list"]').length > 0,
+      authenticatedInbox,
       conversationSelected: visibleNodes('[data-e2e="chat-uniqueid"]').length === 1,
-      login: route === "login" || visibleNodes('[data-e2e="top-login-button"], #header-login-button, #top-right-login-button, #top-right-action-bar-login-button, #login-modal-title').length > 0,
+      loginRoute: route === "login",
+      loginControlsVisible,
+      login: route === "login" || (!authenticatedInbox && loginControlsVisible),
       challenge: visibleNodes('iframe[src*="captcha"], iframe[src*="verify"]').length > 0
         || /captcha|verify (?:that )?you(?:'re| are) human|security verification/i.test(controlText),
       restricted: /cannot send|can't send|unable to send|messages? (?:are |is )?disabled|messaging unavailable|message requests? limit/i.test(controlText),
@@ -153,9 +225,9 @@ async function waitForState(page, stage, predicate, timeout = 10000) {
   return null;
 }
 
-async function dismissOverlays(page) {
+async function dismissOverlays(page, stage = "overlay") {
   const state = await readState(page);
-  const failure = stateFailure(state, "overlay");
+  const failure = stateFailure(state, stage);
   if (failure) throw failure;
   for (let i = 0; i < 5; i++) {
     const overlay = page.locator(".TUXModal-overlay");
@@ -322,35 +394,45 @@ async function sendEmoji(page, username, emoji) {
 
 async function main() {
   const cookies = loadCookies();
-  console.log(`Loaded ${cookies.length} TikTok cookies`);
+  const authOnly = process.argv.includes("--auth-only");
+  console.log(`Parsed ${cookies.length} TikTok cookies; authentication not yet checked`);
 
   const browser = await chromium.launch({
     headless: true,
     args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"],
   });
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
-    locale: "en-US",
-    timezoneId: process.env.TZ_ID || "UTC",
-    userAgent:
-      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-  });
-  await context.addCookies(cookies);
-  const page = await context.newPage();
-  observePage(page);
-
   let failures = 0;
+  let stage = "browser_context";
   try {
+    const context = await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+      locale: "en-US",
+      timezoneId: process.env.TZ_ID || "UTC",
+      userAgent:
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    });
+    stage = "cookie_import";
+    await context.addCookies(cookies);
+    console.log(JSON.stringify({ code: "cookie_import_summary", ...await cookieImportSummary(context, cookies) }));
+    console.log(JSON.stringify({ code: "browser_configuration", headless: true, browserVersion: browser.version(),
+      configuredUserAgentMajor: 126, configuredUserAgentPlatform: "Linux", runtimePlatform: process.platform }));
+    const page = await context.newPage();
+    observePage(page);
+    stage = "session_preflight";
     await page.goto("https://www.tiktok.com/messages", {
       waitUntil: "domcontentloaded",
       timeout: 60000,
     });
     await sleep(jitter(3000, 5000));
-    await dismissOverlays(page);
+    await dismissOverlays(page, "session_preflight");
     if (!(await waitForState(page, "session_preflight", (state) => state.route === "messages" && state.authenticatedInbox))) {
       await failWithState(page, "session_preflight", "authentication_unconfirmed_or_inbox_ui_unsupported");
     }
     console.log("Authenticated inbox UI observed; each recipient and composer will be checked before sending.");
+    if (authOnly) {
+      console.log(JSON.stringify({ code: "authentication_verified", stage: "session_preflight", state: await readState(page) }));
+      return;
+    }
 
     const friends = config.friends.filter((f) => !f.startsWith("friend_username"));
     if (!friends.length) {
@@ -369,7 +451,7 @@ async function main() {
   } catch (err) {
     console.error(JSON.stringify(err instanceof BotFailure
       ? { code: err.code, stage: err.stage, state: err.state }
-      : { code: "run_failed", errorType: err.name === "TimeoutError" ? "timeout" : "error" }));
+      : { code: "run_failed", stage, errorType: err.name === "TimeoutError" ? "timeout" : "error" }));
     failures++;
   } finally {
     await browser.close();
