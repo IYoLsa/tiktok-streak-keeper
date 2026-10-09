@@ -2,6 +2,9 @@ name: daily-streak
 
 on:
   schedule:
+    # Runs daily at 06:00 UTC. Change this to whatever time you want
+    # (crontab.guru helps). GitHub adds 5-30 min of drift, plus the
+    # random delay below - one message lands every calendar day either way.
     - cron: "0 6 * * *"
   workflow_dispatch: {}
 
@@ -10,8 +13,12 @@ permissions:
 
 jobs:
   streak:
-    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
     timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
 
@@ -20,12 +27,20 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm.cmd install --no-audit --no-fund
 
       - name: Install Chromium
-        run: npx playwright install chromium --with-deps
+        run: npx.cmd playwright install chromium
+
+      - name: Check TikTok authentication
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TIKTOK_COOKIES: ${{ secrets.TIKTOK_COOKIES }}
+          TZ_ID: ${{ vars.TZ_ID || 'UTC' }}
+        run: node streak.js --auth-only
 
       - name: Send streak emojis
+        if: github.event_name == 'schedule'
         env:
           TIKTOK_COOKIES: ${{ secrets.TIKTOK_COOKIES }}
           TZ_ID: ${{ vars.TZ_ID || 'UTC' }}
