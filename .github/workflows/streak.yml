@@ -5,7 +5,7 @@ on:
     # Runs daily at 10:00 UTC. Change this to whatever time you want
     # (crontab.guru helps). GitHub adds 5-30 min of drift, plus the
     # random delay below - one message lands every calendar day either way.
-    - cron: "0 10 * * *"
+    - cron: "0 6 * * *"
   workflow_dispatch: {}
 
 permissions:
