@@ -37,12 +37,3 @@ jobs:
           TIKTOK_COOKIES: ${{ secrets.TIKTOK_COOKIES }}
           TZ_ID: ${{ vars.TZ_ID || 'UTC' }}
         run: node streak.js
-
-      - name: Upload screenshots (debugging)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: screenshots
-          path: shots/
-          if-no-files-found: ignore
-          retention-days: 5
